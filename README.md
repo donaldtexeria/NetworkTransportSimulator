@@ -1,4 +1,5 @@
 # Reliable Streaming Network Transport Simulator
 
-by Steve Tarzia
+Donald Texeria, dat6381
+Elysia Lopez, ecs
 
