@@ -4,6 +4,7 @@ from lossy_socket import LossyUDP
 from socket import INADDR_ANY
 import struct
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 class Streamer:
     MAX = 1472
@@ -21,6 +22,11 @@ class Streamer:
         self.dst_port = dst_port
         self.recv_buff = {}
         self.seq_expected = 0
+
+        self.closed = False
+        
+        executor = ThreadPoolExecutor(max_workers=1)
+        executor.submit(self.listener)
 
     def send(self, data_bytes: bytes) -> None:
         """Note that data_bytes can be larger than one packet."""
@@ -41,37 +47,44 @@ class Streamer:
             #for now I'm just sending the raw application-level data in one UDP payload
         #self.socket.sendto(data_bytes, (self.dst_ip, self.dst_port))
 
+    def listener(self):
+        while not self.closed:
+            try:
+                data, addr = self.socket.recvfrom()
+                
+                if len(data) < struct.calcsize(self.HEADER):
+                    print("Received an incomplete packet; skipping.")
+                    continue  # Skip this iteration if the packet is too small
+
+                seq_num = struct.unpack(self.HEADER, data[:min(struct.calcsize(self.HEADER), len(data))])[0]
+                payload = data[struct.calcsize(self.HEADER):]
+                self.recv_buff[seq_num] = payload
+
+            except Exception as e:
+                print("listener died!")
+                print(e)
+
+
     def recv(self) -> bytes:
         """Blocks (waits) if no data is ready to be read from the connection."""
         # your code goes here!  The code below should be changed!
         
         # this sample code just calls the recvfrom method on the LossySocket
         ordered = b''
-        if self.seq_expected in self.recv_buff:
-                ret = self.recv_buff[self.seq_expected]
-                del self.recv_buff[self.seq_expected]
-                self.seq_expected = self.seq_expected + 1
-                return ret
+        
         while True:
-            data, addr = self.socket.recvfrom()
-            
-            seq_num = struct.unpack(self.HEADER, data[:struct.calcsize(self.HEADER)])[0]
-            payload = data[struct.calcsize(self.HEADER):]
-
-            self.recv_buff[seq_num] = payload
-            
             if self.seq_expected in self.recv_buff:
                 ret = self.recv_buff[self.seq_expected]
                 del self.recv_buff[self.seq_expected]
                 self.seq_expected = self.seq_expected + 1
-                break
-            
-            ordered += payload
-        # For now, I'll just pass the full UDP payload to the app
-        return ret
+                return ret
+            else:
+                time.sleep(.01)
 
     def close(self) -> None:
         """Cleans up. It should block (wait) until the Streamer is done with all
            the necessary ACKs and retransmissions"""
         # your code goes here, especially after you add ACKs and retransmissions.
+        self.closed = True
+        self.socket.stoprecv()
         pass
