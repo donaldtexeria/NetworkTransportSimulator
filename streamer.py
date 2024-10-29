@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 class Streamer:
     MAX = 1472
-    HEADER = '!I'
+    HEADER = '!II'
     MAX_PAYLOAD = MAX - struct.calcsize(HEADER)
     
     seq_num = 0
@@ -22,8 +22,10 @@ class Streamer:
         self.dst_port = dst_port
         self.recv_buff = {}
         self.seq_expected = 0
+        self.ack_num = 0
 
         self.closed = False
+        self.ack = False
         
         executor = ThreadPoolExecutor(max_workers=1)
         executor.submit(self.listener)
@@ -38,14 +40,20 @@ class Streamer:
             last_index = min(i + self.MAX_PAYLOAD, bytes_size)
             chunk = data_bytes[i:last_index] #w
             
-            header = struct.pack(self.HEADER, self.seq_num)
+            header = struct.pack(self.HEADER, self.seq_num, 1)
             packet = header + chunk
+            
+            self.ack = False
+            self.ack_num = self.seq_num
             
             self.socket.sendto(packet, (self.dst_ip, self.dst_port))
             self.seq_num = self.seq_num + 1
 
             #for now I'm just sending the raw application-level data in one UDP payload
         #self.socket.sendto(data_bytes, (self.dst_ip, self.dst_port))
+            while not self.ack:
+                time.sleep(.01)
+
 
     def listener(self):
         while not self.closed:
@@ -56,9 +64,18 @@ class Streamer:
                     print("Received an incomplete packet; skipping.")
                     continue  # Skip this iteration if the packet is too small
 
-                seq_num = struct.unpack(self.HEADER, data[:min(struct.calcsize(self.HEADER), len(data))])[0]
+                seq_num, flag = struct.unpack(self.HEADER, data[:min(struct.calcsize(self.HEADER), len(data))])
+                
+                if flag == 0:
+                    print("ack received")
+                    self.ack = True
+                    continue
+                print("data received")
                 payload = data[struct.calcsize(self.HEADER):]
                 self.recv_buff[seq_num] = payload
+                
+                ack_header = struct.pack(self.HEADER, seq_num, 0)
+                self.socket.sendto(ack_header, (self.dst_ip, self.dst_port))
 
             except Exception as e:
                 print("listener died!")
