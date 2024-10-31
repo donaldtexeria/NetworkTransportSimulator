@@ -6,6 +6,7 @@ import struct
 import time
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
+import threading
 
 class Streamer:
     MAX = 1472
@@ -31,6 +32,9 @@ class Streamer:
 
         self.closed = False
         self.ack = -1
+        self.lock = threading.Lock()
+
+        self.received_seqnums = set()
         
         executor = ThreadPoolExecutor(max_workers=1)
         executor.submit(self.listener)
@@ -47,19 +51,28 @@ class Streamer:
             chunk = data_bytes[i:last_index] #w
             #hashvalue = md5(chunk).digest()
             
-            md5.update(chunk)
-            hashvalue = md5.digest()
+            #md5.update(chunk)
+
             
-            header = struct.pack(self.HEADER, self.seq_num, 1, hashvalue)
-            packet = header + chunk
-            
-            self.ack = -1
-            self.final_ack_val = self.seq_num
+            with self.lock:
+                header = struct.pack(self.HEADER, self.seq_num, 1, b'0')
+                md5.update(header)
+                md5.update(chunk)
+                hashvalue = md5.digest()
+
+                header = struct.pack(self.HEADER, self.seq_num, 1, hashvalue)
+
+                packet = header + chunk
+                self.ack = -1
+                self.final_ack_val = self.seq_num
+                self.seq_num = self.seq_num + 1
 
             if self.closed:
                 return
             self.socket.sendto(packet, (self.dst_ip, self.dst_port))
-            self.seq_num = self.seq_num + 1
+
+            
+            
 
             #sends packets one by one, waiting for ACK before sending the next one
             time_start = time.time()
@@ -86,10 +99,12 @@ class Streamer:
 
                 seq_num, flag, hash_recvd = struct.unpack(self.HEADER, data[:min(struct.calcsize(self.HEADER), len(data))])
                 md5 = hashlib.md5()
+                header = struct.pack(self.HEADER, seq_num, flag, b'0')
                 payload = data[struct.calcsize(self.HEADER):]
+                md5.update(header)
                 md5.update(payload)
-                payload_digest = md5.digest()
-                if payload_digest != hash_recvd and flag == 1:
+                packet_hash = md5.digest()
+                if packet_hash != hash_recvd and flag == 1:
                     #print("stuck in continue")
                     continue
 
@@ -115,7 +130,10 @@ class Streamer:
                     continue
                 #print("data received")
                 payload = data[struct.calcsize(self.HEADER):]
-                self.recv_buff[seq_num] = payload
+                
+                if seq_num not in self.received_seqnums:
+                    self.recv_buff[seq_num] = payload
+                    self.received_seqnums.add(seq_num)
                 
                 ack_header = struct.pack(self.HEADER, seq_num, 0, b'\x00' * 16)
                 self.socket.sendto(ack_header, (self.dst_ip, self.dst_port))
@@ -135,8 +153,11 @@ class Streamer:
         while True:
             if self.seq_expected in self.recv_buff:
                 ret = self.recv_buff[self.seq_expected]
+                if self.seq_expected == 339:
+                    print(f"butterfly {ret}")
                 del self.recv_buff[self.seq_expected]
-                self.seq_expected = self.seq_expected + 1
+                with self.lock:
+                    self.seq_expected = self.seq_expected + 1
                 return ret
             else:
                 time.sleep(.01)
