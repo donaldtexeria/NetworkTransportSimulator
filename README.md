@@ -1,5 +1,5 @@
 # Reliable Streaming Network Transport Simulator
 
-Donald Texeria, dat6381
-Elysia Lopez, ecs
+Network Transport Simulator:
 
+Simulates TCP packet transport with instances of packet loss and packet corruption.
